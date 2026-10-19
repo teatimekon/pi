@@ -431,8 +431,15 @@ async function streamResponse(
 		const events = runtime.models.streamSimple(model, { messages: [...messages] }, options);
 		for await (const event of events) {
 			// A partial without content, such as pi-ai's opening `start` event, shows nothing; a deferred response
-			// never gets past it, so it never leaves a partial.
-			if (event.type === "done" || event.type === "error" || event.partial.content.length === 0) continue;
+			// never gets past it, so it never leaves a partial. External tool results are persisted by their
+			// owning agent session and do not replace the assistant partial.
+			if (
+				event.type === "done" ||
+				event.type === "error" ||
+				event.type === "tool_result" ||
+				event.partial.content.length === 0
+			)
+				continue;
 			pending = event.partial;
 			if (timer === undefined && inFlight === undefined) timer = setTimeout(flush, interval);
 		}

@@ -238,27 +238,35 @@ async function runLoop(
 				};
 			}
 
-			// Stream assistant response
-			const message = await streamAssistantResponse(currentContext, config, signal, emit, streamFunction);
+			// Stream assistant response. External harnesses may include tool results that
+			// are already complete; keep them in the transcript but never execute them again.
+			const response = await streamAssistantResponse(currentContext, config, signal, emit, streamFunction);
+			const message = response.message;
 			newMessages.push(message);
+			const toolResults: ToolResultMessage[] = [...response.externalToolResults];
+			for (const result of response.externalToolResults) newMessages.push(result);
 
 			if (message.stopReason === "error" || message.stopReason === "aborted") {
 				lastCompletedTurn = {
 					message,
-					toolResults: [],
+					toolResults,
 					context: currentContext,
 					newMessages,
 				};
 				await config.finishTurn?.(lastCompletedTurn, signal);
-				await emit({ type: "turn_end", message, toolResults: [] });
+				await emit({ type: "turn_end", message, toolResults });
 				await emit({ type: "agent_end", messages: newMessages });
 				return;
 			}
 
-			// Check for tool calls
-			const toolCalls = message.content.filter((c) => c.type === "toolCall");
+			// Check for tool calls. Results supplied by an external harness have already
+			// been persisted and must not be executed by Pi a second time.
+			const externalToolCallIds = new Set(response.externalToolResults.map((result) => result.toolCallId));
+			const toolCalls = message.content.filter(
+				(content): content is Extract<AssistantMessage["content"][number], { type: "toolCall" }> =>
+					content.type === "toolCall" && !externalToolCallIds.has(content.id),
+			);
 
-			const toolResults: ToolResultMessage[] = [];
 			hasMoreToolCalls = false;
 			if (toolCalls.length > 0) {
 				// A "length" stop means the output was cut off by the token limit, so
@@ -267,11 +275,11 @@ async function runLoop(
 				const executedToolBatch =
 					message.stopReason === "length"
 						? await failToolCallsFromTruncatedMessage(toolCalls, emit)
-						: await executeToolCalls(currentContext, message, config, signal, emit);
+						: await executeToolCalls(currentContext, message, config, signal, emit, toolCalls);
 				toolResults.push(...executedToolBatch.messages);
 				hasMoreToolCalls = !executedToolBatch.terminate;
 
-				for (const result of toolResults) {
+				for (const result of executedToolBatch.messages) {
 					currentContext.messages.push(result);
 					newMessages.push(result);
 				}
@@ -378,13 +386,18 @@ function withToolChanges(message: SystemMessage, { toolsAdded, toolsRemoved }: T
  * Stream an assistant response from the LLM.
  * This is where AgentMessage[] gets transformed to Message[] for the LLM.
  */
+interface StreamAssistantResponseResult {
+	message: AssistantMessage;
+	externalToolResults: ToolResultMessage[];
+}
+
 async function streamAssistantResponse(
 	context: AgentContext,
 	config: AgentLoopConfig,
 	signal: AbortSignal | undefined,
 	emit: AgentEventSink,
 	streamFunction: StreamFn,
-): Promise<AssistantMessage> {
+): Promise<StreamAssistantResponseResult> {
 	// Apply context transform if configured (AgentMessage[] → AgentMessage[])
 	let messages = context.messages;
 	if (config.transformContext) {
@@ -409,15 +422,25 @@ async function streamAssistantResponse(
 	const result = async () => Object.assign(await response.result(), { thinkingLevel: config.reasoning ?? "off" });
 
 	let partialMessage: AssistantMessage | null = null;
+	let partialMessageIndex = -1;
 	let addedPartial = false;
+	const externalToolResults: ToolResultMessage[] = [];
 
 	for await (const event of response) {
 		switch (event.type) {
 			case "start":
 				partialMessage = event.partial;
+				partialMessageIndex = context.messages.length;
 				context.messages.push(partialMessage);
 				addedPartial = true;
 				await emit({ type: "message_start", message: { ...partialMessage } });
+				break;
+
+			case "tool_result":
+				externalToolResults.push(event.message);
+				if (partialMessage) {
+					await emit({ type: "message_update", message: { ...partialMessage }, assistantMessageEvent: event });
+				}
 				break;
 
 			case "text_start":
@@ -431,7 +454,7 @@ async function streamAssistantResponse(
 			case "toolcall_end":
 				if (partialMessage) {
 					partialMessage = event.partial;
-					context.messages[context.messages.length - 1] = partialMessage;
+					context.messages[partialMessageIndex] = partialMessage;
 					await emit({
 						type: "message_update",
 						assistantMessageEvent: event,
@@ -444,28 +467,40 @@ async function streamAssistantResponse(
 			case "error": {
 				const finalMessage = await result();
 				if (addedPartial) {
-					context.messages[context.messages.length - 1] = finalMessage;
+					context.messages[partialMessageIndex] = finalMessage;
 				} else {
+					partialMessageIndex = context.messages.length;
 					context.messages.push(finalMessage);
 				}
 				if (!addedPartial) {
 					await emit({ type: "message_start", message: { ...finalMessage } });
 				}
 				await emit({ type: "message_end", message: finalMessage });
-				return finalMessage;
+				for (const toolResult of externalToolResults) {
+					context.messages.push(toolResult);
+					await emit({ type: "message_start", message: toolResult });
+					await emit({ type: "message_end", message: toolResult });
+				}
+				return { message: finalMessage, externalToolResults };
 			}
 		}
 	}
 
 	const finalMessage = await result();
 	if (addedPartial) {
-		context.messages[context.messages.length - 1] = finalMessage;
+		context.messages[partialMessageIndex] = finalMessage;
 	} else {
+		partialMessageIndex = context.messages.length;
 		context.messages.push(finalMessage);
 		await emit({ type: "message_start", message: { ...finalMessage } });
 	}
 	await emit({ type: "message_end", message: finalMessage });
-	return finalMessage;
+	for (const toolResult of externalToolResults) {
+		context.messages.push(toolResult);
+		await emit({ type: "message_start", message: toolResult });
+		await emit({ type: "message_end", message: toolResult });
+	}
+	return { message: finalMessage, externalToolResults };
 }
 
 /**
@@ -511,8 +546,9 @@ async function executeToolCalls(
 	config: AgentLoopConfig,
 	signal: AbortSignal | undefined,
 	emit: AgentEventSink,
+	selectedToolCalls: AgentToolCall[],
 ): Promise<ExecutedToolCallBatch> {
-	const toolCalls = assistantMessage.content.filter((c) => c.type === "toolCall");
+	const toolCalls = selectedToolCalls;
 	const hasSequentialToolCall = toolCalls.some(
 		(tc) => currentContext.tools?.find((t) => t.name === tc.name)?.executionMode === "sequential",
 	);

@@ -897,6 +897,48 @@ describe("Agent", () => {
 		expect(sawAbortSignal).toBe(true);
 	});
 
+	it("does not execute tool calls whose results came from an external harness", async () => {
+		let executeCount = 0;
+		const tool: AgentTool = {
+			name: "external_tool",
+			label: "External tool",
+			description: "Handled outside Pi",
+			parameters: Type.Object({}),
+			execute: async () => {
+				executeCount++;
+				return { content: [{ type: "text", text: "wrong" }], details: {} };
+			},
+		};
+		const agent = new Agent({
+			initialState: { tools: [tool] },
+			streamFn: () => {
+				const stream = createAssistantMessageEventStream();
+				queueMicrotask(() => {
+					const message = createAssistantToolUseMessage([
+						{ type: "toolCall", id: "external-1", name: "external_tool", arguments: {} },
+					]);
+					const toolResult = {
+						role: "toolResult" as const,
+						toolCallId: "external-1",
+						toolName: "external_tool",
+						content: [{ type: "text" as const, text: "handled by Claude Code" }],
+						isError: false,
+						timestamp: Date.now(),
+					};
+					stream.push({ type: "start", partial: message });
+					stream.push({ type: "tool_result", message: toolResult, partial: message });
+					stream.push({ type: "done", reason: "toolUse", message });
+				});
+				return stream;
+			},
+		});
+
+		await agent.prompt("run the external tool");
+
+		expect(executeCount).toBe(0);
+		expect(agent.state.messages.filter((message) => message.role === "toolResult")).toHaveLength(1);
+	});
+
 	it("forwards finishTurn through AgentOptions with the active abort signal", async () => {
 		const schema = Type.Object({});
 		const tool: AgentTool<typeof schema> = {

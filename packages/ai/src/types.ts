@@ -247,6 +247,8 @@ export interface StreamOptions extends ProviderRequestOptions<Model<Api>> {
 	 * session-aware features. Ignored by providers that don't support it.
 	 */
 	sessionId?: string;
+	/** Working directory for providers that launch local tools or processes. */
+	cwd?: string;
 	/**
 	 * WebSocket connect timeout in milliseconds for providers that support
 	 * WebSocket transports. This covers the connection/open handshake only;
@@ -814,6 +816,8 @@ export type AssistantMessageEvent =
 	| { type: "toolcall_start"; contentIndex: number; partial: AssistantMessage }
 	| { type: "toolcall_delta"; contentIndex: number; delta: string; partial: AssistantMessage }
 	| { type: "toolcall_end"; contentIndex: number; toolCall: ToolCall; partial: AssistantMessage }
+	/** A tool result already produced by an external harness during this response. */
+	| { type: "tool_result"; message: ToolResultMessage; partial: AssistantMessage }
 	| {
 			type: "done";
 			reason: Extract<StopReason, "stop" | "length" | "toolUse" | "deferred">;
