@@ -18,13 +18,57 @@ import type { ExtensionAPI } from "../../core/extensions/types.ts";
 
 const PROVIDER = "claude-code";
 const API = "claude-code-cli";
-const DEFAULT_CONTEXT_WINDOW = 200_000;
-const DEFAULT_MAX_TOKENS = 32_000;
-const CLAUDE_MODELS = [
-	{ id: "claude-fable-5-1", name: "Claude Fable 5.1" },
-	{ id: "claude-opus-5", name: "Claude Opus 5" },
-	{ id: "claude-sonnet-5", name: "Claude Sonnet 5" },
-	{ id: "claude-haiku-4-5-20251001", name: "Claude Haiku 4.5" },
+const CLAUDE_MODELS: Array<{
+	id: string;
+	name: string;
+	contextWindow: number;
+	maxTokens: number;
+	thinkingLevelMap: Record<string, string | null>;
+}> = [
+	{
+		id: "claude-fable-5-1",
+		name: "Claude Fable 5.1",
+		contextWindow: 1_000_000,
+		maxTokens: 128_000,
+		thinkingLevelMap: { off: null, xhigh: "xhigh", max: "max" },
+	},
+	{
+		id: "claude-opus-5",
+		name: "Claude Opus 5",
+		contextWindow: 1_000_000,
+		maxTokens: 128_000,
+		thinkingLevelMap: { off: null, xhigh: "xhigh", max: "max" },
+	},
+	{
+		id: "claude-opus-5-5",
+		name: "Claude Opus 5.5",
+		contextWindow: 1_000_000,
+		maxTokens: 128_000,
+		thinkingLevelMap: {
+			off: null,
+			minimal: null,
+			low: "low",
+			medium: "medium",
+			high: "high",
+			xhigh: "xhigh",
+			max: "max",
+		},
+	},
+	{
+		id: "claude-sonnet-5-5",
+		name: "Claude Sonnet 5.5",
+		contextWindow: 1_000_000,
+		maxTokens: 128_000,
+		thinkingLevelMap: {
+			off: null,
+			minimal: null,
+			low: "low",
+			medium: "medium",
+			high: "high",
+			xhigh: "xhigh",
+			max: "max",
+		},
+	},
 ];
 
 type ClaudeUsage = {
@@ -484,24 +528,16 @@ export default function (pi: ExtensionAPI) {
 		api: API,
 		baseUrl: "claude-code://local",
 		apiKey: "claude-code",
-		models: CLAUDE_MODELS.map(({ id, name }) => ({
+		models: CLAUDE_MODELS.map(({ id, name, contextWindow, maxTokens, thinkingLevelMap }) => ({
 			id,
 			name,
 			api: API,
-			input: ["text"],
+			input: ["text", "image"],
 			reasoning: true,
-			thinkingLevelMap: {
-				off: null,
-				minimal: "low",
-				low: "low",
-				medium: "medium",
-				high: "high",
-				xhigh: "max",
-				max: "max",
-			},
+			thinkingLevelMap,
 			cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-			contextWindow: DEFAULT_CONTEXT_WINDOW,
-			maxTokens: DEFAULT_MAX_TOKENS,
+			contextWindow,
+			maxTokens,
 		})),
 		streamSimple: createStream,
 	});
