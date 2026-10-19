@@ -18,6 +18,10 @@
 		},
 		"./rpc-entry": {
 			"import": "./dist/bundle/rpc-entry.js"
+		},
+		"./extensions/claude-code": {
+			"types": "./dist/extensions/claude-code/index.d.ts",
+			"import": "./dist/extensions/claude-code/index.js"
 		}
 	},
 	"files": [
