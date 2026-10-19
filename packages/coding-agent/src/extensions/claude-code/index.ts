@@ -21,9 +21,10 @@ const API = "claude-code-cli";
 const DEFAULT_CONTEXT_WINDOW = 200_000;
 const DEFAULT_MAX_TOKENS = 32_000;
 const CLAUDE_MODELS = [
-	{ id: "claude-opus-4-6", name: "Claude Opus 4.6" },
-	{ id: "claude-sonnet-4-6", name: "Claude Sonnet 4.6" },
-	{ id: "claude-haiku-4-5", name: "Claude Haiku 4.5" },
+	{ id: "claude-fable-5-1", name: "Claude Fable 5.1" },
+	{ id: "claude-opus-5", name: "Claude Opus 5" },
+	{ id: "claude-sonnet-5", name: "Claude Sonnet 5" },
+	{ id: "claude-haiku-4-5-20251001", name: "Claude Haiku 4.5" },
 ];
 
 type ClaudeUsage = {

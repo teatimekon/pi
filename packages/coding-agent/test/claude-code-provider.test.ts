@@ -29,7 +29,7 @@ const session_id = args[args.indexOf(flag) + 1];
 const emit = (value) => process.stdout.write(JSON.stringify({ session_id, ...value }) + "\\n");
 const inner = (event) => emit({ type: "stream_event", event });
 emit({ type: "system", subtype: "init" });
-inner({ type: "message_start", message: { model: "claude-sonnet-4-6", usage: { input_tokens: 3, output_tokens: 0 } } });
+inner({ type: "message_start", message: { model: "claude-sonnet-5", usage: { input_tokens: 3, output_tokens: 0 } } });
 inner({ type: "content_block_start", index: 0, content_block: { type: "thinking", thinking: "" } });
 inner({ type: "content_block_delta", index: 0, delta: { type: "thinking_delta", thinking: "think" } });
 inner({ type: "content_block_stop", index: 0 });
@@ -38,7 +38,7 @@ inner({ type: "content_block_delta", index: 1, delta: { type: "input_json_delta"
 inner({ type: "content_block_stop", index: 1 });
 inner({ type: "message_delta", delta: { stop_reason: "tool_use" }, usage: { input_tokens: 3, output_tokens: 8 } });
 emit({ type: "user", message: { role: "user", content: [{ type: "tool_result", tool_use_id: "tool-1", content: "hi", is_error: false }] } });
-inner({ type: "message_start", message: { model: "claude-sonnet-4-6", usage: { input_tokens: 4, output_tokens: 0 } } });
+inner({ type: "message_start", message: { model: "claude-sonnet-5", usage: { input_tokens: 4, output_tokens: 0 } } });
 inner({ type: "content_block_start", index: 0, content_block: { type: "text", text: "" } });
 inner({ type: "content_block_delta", index: 0, delta: { type: "text_delta", text: "done" } });
 inner({ type: "content_block_stop", index: 0 });
@@ -74,7 +74,7 @@ describe.skipIf(process.platform === "win32")("claude-code provider", () => {
 		} as unknown as ExtensionAPI;
 		claudeCodeExtension(pi);
 		provider = registered[0]!;
-		const config = provider.models!.find((entry) => entry.id === "claude-sonnet-4-6")!;
+		const config = provider.models!.find((entry) => entry.id === "claude-sonnet-5")!;
 		model = { ...config, provider: "claude-code", api: provider.api!, baseUrl: provider.baseUrl! } as Model<Api>;
 	});
 
@@ -105,7 +105,7 @@ describe.skipIf(process.platform === "win32")("claude-code provider", () => {
 			"--session-id",
 			"pi-session",
 			"--model",
-			"claude-sonnet-4-6",
+			"claude-sonnet-5",
 			"--effort",
 			"high",
 			'say "hi" $HOME',
