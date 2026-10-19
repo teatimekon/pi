@@ -5,6 +5,7 @@ import { ResetEntry } from "../entries.ts";
 import type { ExecutionEnv } from "../env/index.ts";
 import { contained, SessionImpl } from "../session/session.ts";
 import type { Transaction } from "../session/transaction.ts";
+import { hostTimers } from "../timers.ts";
 import type {
 	ConversationId,
 	ConversationOwnership,
@@ -14,6 +15,7 @@ import type {
 	EntryQuery,
 	EntryRecord,
 	Page,
+	ReportInfo,
 	Storage,
 	SubmissionId,
 	TaskId,
@@ -51,6 +53,7 @@ import type {
 	Submission,
 	SubmissionDraft,
 	ToolRegistration,
+	Wake,
 } from "./types.ts";
 import { addUsageState, UsageDoc, type UsageState } from "./usage.ts";
 import { scanAll } from "./util.ts";
@@ -181,7 +184,7 @@ function currentSettings(settings: HarnessOptions["settings"]): () => HarnessSet
 class HarnessImpl<Tool extends ToolRegistration> extends SessionImpl implements HarnessType {
 	readonly #options: HarnessOptions<Tool>;
 	readonly #hostSettings: () => HarnessSettings | undefined;
-	readonly #report: (error: unknown) => void;
+	readonly #report: (error: unknown, info: ReportInfo) => void;
 	readonly #host: ConversationHost<Tool>;
 	readonly #tasks: TaskScheduler;
 	readonly #submissions: Submissions;
@@ -192,7 +195,7 @@ class HarnessImpl<Tool extends ToolRegistration> extends SessionImpl implements 
 		const now = safeNow(options.now, report);
 		const hostSettings = currentSettings(options.settings);
 		// Read at each use, as all settings are, but only this field: it is read on every commit.
-		super(rawStorage, now, () => hostSettings()?.documentRetentionMs);
+		super(rawStorage, now, () => hostSettings()?.documentRetentionMs, options.setTimer);
 		// Every component reads and writes through the Session's failure guard: `rawStorage` serves only `super()`.
 		const storage = this.storage;
 		this.#options = options;
@@ -208,6 +211,9 @@ class HarnessImpl<Tool extends ToolRegistration> extends SessionImpl implements 
 			settings,
 			env: (id, callContext) => this.buildEnv(id, callContext),
 			now,
+			onWake: options.onWake,
+			timers: hostTimers(options.setTimer, (error) => report(error, { type: "host_error", callback: "setTimer" })),
+			writeAtClose: (writes) => this.writeAtClose(writes),
 			report: this.#report,
 			settleOutcome: settleSchedulerOutcome,
 			withdrawInputs: withdrawQueuedInputs,
@@ -218,7 +224,10 @@ class HarnessImpl<Tool extends ToolRegistration> extends SessionImpl implements 
 			context: withoutAbortSignal(context),
 		});
 		this.#submissions = new Submissions(this, storage, now, settings, () => this.#tasks.resume());
-		this.#taskGraph = new TaskGraphView(this, storage);
+		this.#taskGraph = new TaskGraphView(this, storage, {
+			blocked: (record) => this.#tasks.blockedReason(record),
+			subscribeBlocked: (listener) => this.#tasks.subscribeBlocked(listener),
+		});
 		this.#host = {
 			harness: this,
 			storage,
@@ -238,7 +247,9 @@ class HarnessImpl<Tool extends ToolRegistration> extends SessionImpl implements 
 	): Promise<Agent<Tool>> {
 		const registry = snapshot ?? this.#options.registry.snapshot();
 		const state = await this.snapshot(AgentDoc, id, context);
-		return resolveAgent(state, registry, resolveSettings(this.#hostSettings()), this.#report);
+		return resolveAgent(state, registry, resolveSettings(this.#hostSettings()), (error, extension) =>
+			this.#report(error, { type: "extension_error", conversationId: id, extension }),
+		);
 	}
 
 	/** Build a conversation's environment from its current `cwd`; `undefined` without an `env` option. */
@@ -257,6 +268,11 @@ class HarnessImpl<Tool extends ToolRegistration> extends SessionImpl implements 
 	resume(): void {
 		this.assertUsable();
 		this.#tasks.resume();
+	}
+
+	wake(): Wake {
+		this.assertUsable();
+		return this.#tasks.wake();
 	}
 
 	getTask<R>(id: TaskId<R>, context: Context): Promise<TaskRecord<JsonValue, JsonValue, R> | undefined> {
@@ -294,6 +310,11 @@ class HarnessImpl<Tool extends ToolRegistration> extends SessionImpl implements 
 
 	abortTask(id: TaskId, context: Context): Promise<"marked" | "terminal"> {
 		return this.#tasks.abort(id, context);
+	}
+
+	retryTask(id: TaskId, context: Context): Promise<void> {
+		this.assertUsable();
+		return this.#tasks.retry(id, context);
 	}
 
 	waitForTask<R>(id: TaskId<R>, context: Context): Promise<SettledTask<R>> {
@@ -344,8 +365,8 @@ class HarnessImpl<Tool extends ToolRegistration> extends SessionImpl implements 
 		return this.#create({ kind: "independent", ownership: options.ownership }, options, context);
 	}
 
-	override report(error: unknown): void {
-		this.#report(error);
+	override report(error: unknown, info: ReportInfo = { type: "listener_error" }): void {
+		this.#report(error, info);
 	}
 
 	/** Signal and join task invocations after the close listeners and before Storage closes; writes no task outcome. */
@@ -388,10 +409,12 @@ class HarnessImpl<Tool extends ToolRegistration> extends SessionImpl implements 
 }
 
 /** `onReport` that cannot fail: it is the last place an error goes, so its own throw or rejection is dropped. */
-function safeReport(onReport: ((error: unknown) => void) | undefined): (error: unknown) => void {
-	return (error) =>
+function safeReport(
+	onReport: ((error: unknown, info: ReportInfo) => void) | undefined,
+): (error: unknown, info: ReportInfo) => void {
+	return (error, info) =>
 		contained(
-			() => onReport?.(error),
+			() => onReport?.(error, info),
 			() => {},
 		);
 }
@@ -400,7 +423,10 @@ function safeReport(onReport: ((error: unknown) => void) | undefined): (error: u
  * The host clock, falling back to `Date.now` when it throws: a broken clock must not stop commits. The first throw is
  * reported; the clock is read in every task change, so later ones are not.
  */
-export function safeNow(now: (() => number) | undefined, report: (error: unknown) => void): () => number {
+export function safeNow(
+	now: (() => number) | undefined,
+	report: (error: unknown, info: ReportInfo) => void,
+): () => number {
 	if (now === undefined) return Date.now;
 	let reported = false;
 	return () => {
@@ -410,7 +436,7 @@ export function safeNow(now: (() => number) | undefined, report: (error: unknown
 			// Set first: a report handler that reads the clock again must not report again.
 			if (!reported) {
 				reported = true;
-				report(error);
+				report(error, { type: "host_error", callback: "now" });
 			}
 			return Date.now();
 		}
