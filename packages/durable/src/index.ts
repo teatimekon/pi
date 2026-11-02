@@ -38,7 +38,7 @@ export {
 	type GenerationResult,
 	GenerationTask,
 } from "./harness/generation.ts";
-export { Harness } from "./harness/harness.ts";
+export { DEFAULT_HARNESS_IDENTITY, Harness } from "./harness/harness.ts";
 export { InboxDoc, type InboxItem, type InboxState } from "./harness/inbox.ts";
 export {
 	type CompactionFailure,
@@ -53,6 +53,7 @@ export { ProviderDoc, type ProviderState } from "./harness/provider.ts";
 export { createRegistry } from "./harness/registry.ts";
 export type { BlockedReason } from "./harness/scheduler.ts";
 export type { TaskGraph, TaskGraphNode, TaskGraphState, TaskGraphWatch } from "./harness/task-graph.ts";
+export { DURABLE_TELEMETRY_SCHEMA } from "./harness/telemetry.ts";
 export {
 	NestedCallDoc,
 	type NestedCallState,
